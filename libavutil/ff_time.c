@@ -22,7 +22,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <time.h>
+#include <ff_time.h>
 #if HAVE_GETTIMEOFDAY
 #include <sys/time.h>
 #endif
@@ -33,7 +33,7 @@
 #include <windows.h>
 #endif
 
-#include "time.h"
+#include "ff_time.h"
 #include "error.h"
 
 int64_t av_gettime(void)

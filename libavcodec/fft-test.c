@@ -37,7 +37,7 @@
 #include "libavutil/lfg.h"
 #include "libavutil/log.h"
 #include "libavutil/mathematics.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 
 #include "fft.h"
 #if FFT_FLOAT

@@ -37,7 +37,7 @@
 #include "libavutil/cpu.h"
 #include "libavutil/common.h"
 #include "libavutil/lfg.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 
 #include "dct.h"
 #include "idctdsp.h"

@@ -34,7 +34,7 @@
 #include "internal.h"
 #include "log.h"
 #include "mathematics.h"
-#include "time.h"
+#include "ff_time.h"
 #include "avstring.h"
 #include "timer.h"
 

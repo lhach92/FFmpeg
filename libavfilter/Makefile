@@ -2,7 +2,9 @@ include $(SUBDIR)../config.mak
 
 NAME = avfilter
 
-HEADERS = avfilter.h                                                    \
+HEADERS = asrc_abuffer.h                                                \
+          avcodec.h                                                     \
+          avfilter.h                                                    \
           avfiltergraph.h                                               \
           buffersink.h                                                  \
           buffersrc.h                                                   \
@@ -12,6 +14,7 @@ OBJS = allfilters.o                                                     \
        audio.o                                                          \
        avfilter.o                                                       \
        avfiltergraph.o                                                  \
+       buffer.o                                                         \
        buffersink.o                                                     \
        buffersrc.o                                                      \
        drawutils.o                                                      \
@@ -22,6 +25,9 @@ OBJS = allfilters.o                                                     \
        opencl_allkernels.o                                              \
        transform.o                                                      \
        video.o                                                          \
+
+
+OBJS-$(CONFIG_AVCODEC)                       += avcodec.o
 
 OBJS-$(CONFIG_ACROSSFADE_FILTER)             += af_afade.o
 OBJS-$(CONFIG_ADELAY_FILTER)                 += af_adelay.o
@@ -67,7 +73,6 @@ OBJS-$(CONFIG_DYNAUDNORM_FILTER)             += af_dynaudnorm.o
 OBJS-$(CONFIG_EARWAX_FILTER)                 += af_earwax.o
 OBJS-$(CONFIG_EBUR128_FILTER)                += f_ebur128.o
 OBJS-$(CONFIG_EQUALIZER_FILTER)              += af_biquads.o
-OBJS-$(CONFIG_EXTRASTEREO_FILTER)            += af_extrastereo.o
 OBJS-$(CONFIG_FLANGER_FILTER)                += af_flanger.o generate_wave_table.o
 OBJS-$(CONFIG_HIGHPASS_FILTER)               += af_biquads.o
 OBJS-$(CONFIG_JOIN_FILTER)                   += af_join.o

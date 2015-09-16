@@ -5,6 +5,9 @@ NAME = avformat
 HEADERS = avformat.h                                                    \
           avio.h                                                        \
           version.h                                                     \
+          avc.h                                                         \
+          url.h                                                         \
+          internal.h                                                    \
 
 OBJS = allformats.o         \
        avio.o               \
@@ -22,6 +25,7 @@ OBJS = allformats.o         \
        sdp.o                \
        url.o                \
        utils.o              \
+       avc.o                \
 
 OBJS-$(CONFIG_NETWORK)                   += network.o
 OBJS-$(CONFIG_RIFFDEC)                   += riffdec.o

@@ -52,7 +52,7 @@
 #include "libavutil/random_seed.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/opt.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 
 #include <stdarg.h>
 #if HAVE_UNISTD_H

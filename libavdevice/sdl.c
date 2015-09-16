@@ -30,7 +30,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/pixdesc.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 #include "avdevice.h"
 
 typedef struct {

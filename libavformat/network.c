@@ -25,7 +25,7 @@
 #include "libavcodec/internal.h"
 #include "libavutil/avutil.h"
 #include "libavutil/mem.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 
 int ff_tls_init(void)
 {

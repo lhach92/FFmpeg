@@ -28,7 +28,6 @@
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/opt.h"
-#include "libavutil/time.h"
 
 #include "avformat.h"
 #include "http.h"
@@ -106,16 +105,13 @@ typedef struct HTTPContext {
     int send_expect_100;
     char *method;
     int reconnect;
-    int reconnect_at_eof;
-    int reconnect_streamed;
-    int reconnect_delay;
-    int reconnect_delay_max;
     int listen;
     char *resource;
     int reply_code;
     int is_multi_client;
     HandshakeState handshake_step;
     int is_connected_server;
+    char *tcp_hook;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
@@ -147,12 +143,10 @@ static const AVOption options[] = {
     { "end_offset", "try to limit the request to bytes preceding this offset", OFFSET(end_off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "method", "Override the HTTP method or set the expected HTTP method from a client", OFFSET(method), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "reconnect", "auto reconnect after disconnect before EOF", OFFSET(reconnect), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, D },
-    { "reconnect_at_eof", "auto reconnect at EOF", OFFSET(reconnect_at_eof), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, D },
-    { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, D },
-    { "reconnect_delay_max", "max reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_max), AV_OPT_TYPE_INT, { .i64 = 120 }, 0, UINT_MAX/1000/1000, D },
     { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, D | E },
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
+    { "http-tcp-hook", "hook protocol on tcp", OFFSET(tcp_hook), AV_OPT_TYPE_STRING, { .str = "tcp" }, 0, 0, D | E },
     { NULL }
 };
 
@@ -180,6 +174,8 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     char buf[1024], urlbuf[MAX_URL_SIZE];
     int port, use_proxy, err, location_changed = 0;
     HTTPContext *s = h->priv_data;
+
+    lower_proto = s->tcp_hook;
 
     av_url_split(proto, sizeof(proto), auth, sizeof(auth),
                  hostname, sizeof(hostname), &port,
@@ -993,6 +989,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     char headers[HTTP_HEADERS_SIZE] = "";
     char *authstr = NULL, *proxyauthstr = NULL;
     int64_t off = s->off;
+    int64_t filesize = s->filesize;
     int len = 0;
     const char *method;
     int send_expect_100 = 0;
@@ -1136,6 +1133,15 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     if (*new_location)
         s->off = off;
 
+    /* Some buggy servers may missing 'Content-Range' header for range request */
+    if (off > 0 && s->off <= 0 && (off + s->filesize == filesize)) {
+        av_log(NULL, AV_LOG_WARNING,
+               "try to fix missing 'Content-Range' at server side (%"PRId64",%"PRId64") => (%"PRId64",%"PRId64")",
+               s->off, s->filesize, off, filesize);
+        s->off = off;
+        s->filesize = filesize;
+    }
+
     err = (off == s->off) ? 0 : -1;
 done:
     av_freep(&authstr);
@@ -1158,7 +1164,14 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         if ((!s->willclose || s->chunksize < 0) &&
             s->filesize >= 0 && s->off >= s->filesize)
             return AVERROR_EOF;
-        len = ffurl_read(s->hd, buf, size);
+        len = size;
+        if (s->filesize > 0 && s->filesize != 2147483647) {
+            int64_t unread = s->filesize - s->off;
+            if (len > unread)
+                len = (int)unread;
+        }
+        if (len > 0)
+            len = ffurl_read(s->hd, buf, len);
         if (!len && (!s->willclose || s->chunksize < 0) &&
             s->filesize >= 0 && s->off < s->filesize) {
             av_log(h, AV_LOG_ERROR,
@@ -1249,25 +1262,16 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
         return http_buf_read_compressed(h, buf, size);
 #endif /* CONFIG_ZLIB */
     read_ret = http_buf_read(h, buf, size);
-    if (   (read_ret  < 0 && s->reconnect        && (!h->is_streamed || s->reconnect_streamed) && s->filesize > 0 && s->off < s->filesize)
-        || (read_ret == 0 && s->reconnect_at_eof && (!h->is_streamed || s->reconnect_streamed))) {
-        int64_t target = h->is_streamed ? 0 : s->off;
-
-        if (s->reconnect_delay > s->reconnect_delay_max)
-            return AVERROR(EIO);
-
-        av_log(h, AV_LOG_INFO, "Will reconnect at %"PRId64" error=%s.\n", s->off, av_err2str(read_ret));
-        av_usleep(1000U*1000*s->reconnect_delay);
-        s->reconnect_delay = 1 + 2*s->reconnect_delay;
-        seek_ret = http_seek_internal(h, target, SEEK_SET, 1);
-        if (seek_ret != target) {
-            av_log(h, AV_LOG_ERROR, "Failed to reconnect at %"PRId64".\n", target);
+    if (read_ret < 0 && s->reconnect && !h->is_streamed && s->filesize > 0 && s->off < s->filesize) {
+        av_log(h, AV_LOG_INFO, "Will reconnect at %"PRId64".\n", s->off);
+        seek_ret = http_seek_internal(h, s->off, SEEK_SET, 1);
+        if (seek_ret != s->off) {
+            av_log(h, AV_LOG_ERROR, "Failed to reconnect at %"PRId64".\n", s->off);
             return read_ret;
         }
 
         read_ret = http_buf_read(h, buf, size);
-    } else
-        s->reconnect_delay = 0;
+    }
 
     return read_ret;
 }
@@ -1444,7 +1448,7 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
              ((whence == SEEK_CUR && off == 0) ||
               (whence == SEEK_SET && off == s->off)))
         return s->off;
-    else if ((s->filesize == -1 && whence == SEEK_END))
+    else if ((s->filesize == -1 && whence == SEEK_END) || h->is_streamed)
         return AVERROR(ENOSYS);
 
     if (whence == SEEK_CUR)
@@ -1456,9 +1460,6 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
     if (off < 0)
         return AVERROR(EINVAL);
     s->off = off;
-
-    if (s->off && h->is_streamed)
-        return AVERROR(ENOSYS);
 
     /* we save the old context in case the seek fails */
     old_buf_size = s->buf_end - s->buf_ptr;
@@ -1569,7 +1570,7 @@ static int http_proxy_open(URLContext *h, const char *uri, int flags)
     if (*path == '/')
         path++;
 
-    ff_url_join(lower_url, sizeof(lower_url), "tcp", NULL, hostname, port,
+    ff_url_join(lower_url, sizeof(lower_url), s->tcp_hook, NULL, hostname, port,
                 NULL);
 redo:
     ret = ffurl_open(&s->hd, lower_url, AVIO_FLAG_READ_WRITE,

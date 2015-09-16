@@ -6,6 +6,7 @@ HEADERS = adler32.h                                                     \
           aes.h                                                         \
           attributes.h                                                  \
           audio_fifo.h                                                  \
+          audioconvert.h                                                \
           avassert.h                                                    \
           avstring.h                                                    \
           avutil.h                                                      \
@@ -41,6 +42,7 @@ HEADERS = adler32.h                                                     \
           motion_vector.h                                               \
           murmur3.h                                                     \
           dict.h                                                        \
+          old_pix_fmts.h                                                \
           opt.h                                                         \
           parseutils.h                                                  \
           pixdesc.h                                                     \
@@ -55,7 +57,7 @@ HEADERS = adler32.h                                                     \
           sha512.h                                                      \
           stereo3d.h                                                    \
           threadmessage.h                                               \
-          time.h                                                        \
+          ff_time.h                                                        \
           timecode.h                                                    \
           timestamp.h                                                   \
           twofish.h                                                     \
@@ -127,7 +129,7 @@ OBJS = adler32.o                                                        \
        sha512.o                                                         \
        stereo3d.o                                                       \
        threadmessage.o                                                  \
-       time.o                                                           \
+       ff_time.o                                                           \
        timecode.o                                                       \
        tree.o                                                           \
        twofish.o                                                        \
@@ -145,6 +147,8 @@ OBJS += $(COMPAT_OBJS:%=../compat/%)
 
 # Windows resource file
 SLIBOBJS-$(HAVE_GNU_WINDRES)            += avutilres.o
+
+SKIPHEADERS          = old_pix_fmts.h
 
 SKIPHEADERS-$(HAVE_ATOMICS_GCC)        += atomic_gcc.h
 SKIPHEADERS-$(HAVE_ATOMICS_SUNCC)      += atomic_suncc.h

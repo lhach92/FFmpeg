@@ -478,7 +478,12 @@ typedef struct AVProbeData {
 #define AVFMT_NOGENSEARCH   0x4000 /**< Format does not allow to fall back on generic search */
 #define AVFMT_NO_BYTE_SEEK  0x8000 /**< Format does not allow seeking by bytes */
 #define AVFMT_ALLOW_FLUSH  0x10000 /**< Format allows flushing. If not set, the muxer will not receive a NULL packet in the write_packet function. */
-#define AVFMT_TS_NONSTRICT 0x20000 /**< Format does not require strictly
+#if LIBAVFORMAT_VERSION_MAJOR <= 54
+#define AVFMT_TS_NONSTRICT 0x8020000 //we try to be compatible to the ABIs of ffmpeg and major forks
+#else
+#define AVFMT_TS_NONSTRICT 0x20000
+#endif
+                                   /**< Format does not require strictly
                                         increasing timestamps, but they must
                                         still be monotonic */
 #define AVFMT_TS_NEGATIVE  0x40000 /**< Format allows muxing negative
@@ -678,6 +683,11 @@ typedef struct AVInputFormat {
      * called to create new streams.
      */
     int (*read_header)(struct AVFormatContext *);
+
+    /**
+     * Used by format which open further nested input.
+     */
+    int (*read_header2)(struct AVFormatContext *, AVDictionary **options);
 
     /**
      * Read one packet and put it in 'pkt'. pts and flags are also

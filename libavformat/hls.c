@@ -2,6 +2,7 @@
  * Apple HTTP Live Streaming demuxer
  * Copyright (c) 2010 Martin Storsjo
  * Copyright (c) 2013 Anssi Hannula
+ * Copyright (c) 2011 Cedirc Fung (wolfplanet@gmail.com)
  *
  * This file is part of FFmpeg.
  *
@@ -32,7 +33,7 @@
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 #include "libavutil/dict.h"
-#include "libavutil/time.h"
+#include "libavutil/ff_time.h"
 #include "avformat.h"
 #include "internal.h"
 #include "avio_internal.h"
@@ -66,7 +67,9 @@ enum KeyType {
 };
 
 struct segment {
+    int64_t previous_duration;
     int64_t duration;
+    int64_t start_time;
     int64_t url_offset;
     int64_t size;
     char *url;
@@ -548,7 +551,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                           struct playlist *pls, AVIOContext *in)
 {
     int ret = 0, is_segment = 0, is_variant = 0;
-    int64_t duration = 0;
+    int64_t duration = 0, previous_duration1 = 0, previous_duration = 0, total_duration = 0;
     enum KeyType key_type = KEY_NONE;
     uint8_t iv[16] = "";
     int has_iv = 0;
@@ -561,6 +564,7 @@ static int parse_playlist(HLSContext *c, const char *url,
     uint8_t *new_url = NULL;
     struct variant_info variant_info;
     char tmp_str[MAX_URL_SIZE];
+    int start_seq_no = -1;
 
     if (!in) {
 #if 1
@@ -637,6 +641,11 @@ static int parse_playlist(HLSContext *c, const char *url,
             ret = ensure_playlist(c, &pls, url);
             if (ret < 0)
                 goto fail;
+            /* Some buggy HLS servers write #EXT-X-MEDIA-SEQUENCE more than once */
+            if (start_seq_no < 0) {
+                start_seq_no = atoi(ptr);
+                pls->start_seq_no = start_seq_no;
+            }
             pls->start_seq_no = atoi(ptr);
         } else if (av_strstart(line, "#EXT-X-PLAYLIST-TYPE:", &ptr)) {
             ret = ensure_playlist(c, &pls, url);
@@ -649,6 +658,8 @@ static int parse_playlist(HLSContext *c, const char *url,
         } else if (av_strstart(line, "#EXT-X-ENDLIST", &ptr)) {
             if (pls)
                 pls->finished = 1;
+        } else if (av_strstart(line, "#EXT-X-DISCONTINUITY", &ptr)) {
+            previous_duration = previous_duration1;
         } else if (av_strstart(line, "#EXTINF:", &ptr)) {
             is_segment = 1;
             duration   = atof(ptr) * AV_TIME_BASE;
@@ -681,6 +692,10 @@ static int parse_playlist(HLSContext *c, const char *url,
                     ret = AVERROR(ENOMEM);
                     goto fail;
                 }
+                previous_duration1 += duration;
+                seg->previous_duration = previous_duration;
+                seg->start_time = total_duration;
+                total_duration += duration;
                 seg->duration = duration;
                 seg->key_type = key_type;
                 if (has_iv) {
@@ -998,6 +1013,17 @@ static int open_input(HLSContext *c, struct playlist *pls)
 
     if (seg->key_type == KEY_NONE) {
         ret = open_url(pls->parent->priv_data, &pls->input, seg->url, opts);
+        for (int i = 0; i < 3; ++i) {
+            if (ff_check_interrupt(&pls->parent->interrupt_callback))
+                return AVERROR_EXIT;
+
+            ret = open_url(pls->parent->priv_data, &pls->input, seg->url, opts);
+            if (ret == 0)
+                break;
+
+            av_log(NULL, AV_LOG_ERROR, "failed to open segment, retry...");
+        }
+        goto cleanup;
     } else if (seg->key_type == KEY_AES_128) {
 //         HLSContext *c = var->parent->priv_data;
         char iv[33], key[33], url[MAX_URL_SIZE];
@@ -1645,6 +1671,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                             get_timebase(pls), AV_TIME_BASE_Q);
                 }
 
+                pls->seek_timestamp = AV_NOPTS_VALUE;
                 if (pls->seek_timestamp == AV_NOPTS_VALUE)
                     break;
 
@@ -1699,6 +1726,28 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                                             pls->ctx->streams[pls->pkt.stream_index]->time_base,
                                             AV_TIME_BASE_Q);
 
+        if (c->playlists[minplaylist]->finished) {
+            struct playlist *pls = c->playlists[minplaylist];
+            int seq_no = pls->cur_seq_no - pls->start_seq_no;
+            if (seq_no < pls->n_segments && s->streams[pkt->stream_index]) {
+                struct segment *seg = pls->segments[seq_no];
+                int64_t pred = av_rescale_q(seg->previous_duration,
+                                            AV_TIME_BASE_Q,
+                                            s->streams[pkt->stream_index]->time_base);
+                int64_t max_ts = av_rescale_q(seg->start_time + seg->duration,
+                                              AV_TIME_BASE_Q,
+                                              s->streams[pkt->stream_index]->time_base);
+                /* EXTINF duration is not precise enough */
+                max_ts += 2 * AV_TIME_BASE;
+                if (s->start_time > 0) {
+                    max_ts += av_rescale_q(s->start_time,
+                                           AV_TIME_BASE_Q,
+                                           s->streams[pkt->stream_index]->time_base);
+                }
+                if (pkt->dts != AV_NOPTS_VALUE && pkt->dts + pred < max_ts) pkt->dts += pred;
+                if (pkt->pts != AV_NOPTS_VALUE && pkt->pts + pred < max_ts) pkt->pts += pred;
+            }
+        }
         return 0;
     }
     return AVERROR_EOF;
@@ -1835,4 +1884,5 @@ AVInputFormat ff_hls_demuxer = {
     .read_packet    = hls_read_packet,
     .read_close     = hls_close,
     .read_seek      = hls_read_seek,
+    .flags          = AVFMT_TS_DISCONT,
 };
